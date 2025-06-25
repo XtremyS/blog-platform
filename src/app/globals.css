@@ -2,25 +2,47 @@
 
 :root {
   --background: #ffffff;
-  --foreground: #171717;
-}
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --foreground: #1f2937;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --background: #1f2937;
+    --foreground: #f9fafb;
   }
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  @apply bg-[var(--background)] text-[var(--foreground)];
+}
+
+/* Prose styles for Markdown content */
+.prose {
+  @apply max-w-none text-gray-700 dark:text-gray-200;
+}
+.prose h1 {
+  @apply text-3xl font-bold mt-6 mb-2;
+}
+.prose h2 {
+  @apply text-2xl font-semibold mt-4 mb-2;
+}
+.prose p {
+  @apply mb-4;
+}
+.prose ul,
+.prose ol {
+  @apply ml-6 mb-4;
+}
+.prose li {
+  @apply mb-2;
+}
+.prose table {
+  @apply w-full border-collapse mb-4;
+}
+.prose th,
+.prose td {
+  @apply border p-2;
+}
+.prose th {
+  @apply bg-gray-200 dark:bg-gray-700 font-bold;
 }
