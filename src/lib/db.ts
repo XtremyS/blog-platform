@@ -1,34 +1,20 @@
-import Database from "better-sqlite3";
+import { Pool } from "pg";
 import { v4 as uuidv4 } from "uuid";
 import { Post, Comment } from "./types";
 
-const db = new Database(process.env.DATABASE_URL || "./blog.db");
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false },
+});
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS posts (
-    id TEXT PRIMARY KEY,
-    title TEXT NOT NULL,
-    author TEXT NOT NULL,
-    content TEXT NOT NULL,
-    coverImage TEXT,
-    publishedAt TEXT NOT NULL
+export async function getAllPosts(): Promise<Post[]> {
+  const res = await pool.query(
+    `SELECT * FROM "posts" ORDER BY "publishedAt" DESC`
   );
-  CREATE TABLE IF NOT EXISTS comments (
-    id TEXT PRIMARY KEY,
-    postId TEXT NOT NULL,
-    author TEXT NOT NULL,
-    content TEXT NOT NULL,
-    createdAt TEXT NOT NULL,
-    FOREIGN KEY (postId) REFERENCES posts(id)
-  )
-`);
-
-export function getAllPosts(): Post[] {
-  const stmt = db.prepare("SELECT * FROM posts ORDER BY publishedAt DESC");
-  return stmt.all() as Post[];
+  return res.rows;
 }
 
-export function getPostsWithFilters({
+export async function getPostsWithFilters({
   search = "",
   author = "",
   page = 1,
@@ -38,129 +24,110 @@ export function getPostsWithFilters({
   author?: string;
   page?: number;
   limit?: number;
-}): { posts: Post[]; total: number } {
-  let query = "SELECT * FROM posts WHERE 1=1";
-  const params: (string | number)[] = [];
+}): Promise<{ posts: Post[]; total: number }> {
+  let where = `WHERE 1=1`;
+  const params: unknown[] = [];
+  let i = 1;
 
-  if (search?.trim()) {
-    query += " AND (LOWER(title) LIKE ? OR LOWER(content) LIKE ?)";
-    params.push(
-      `%${search.trim().toLowerCase()}%`,
-      `%${search.trim().toLowerCase()}%`
-    );
+  if (search.trim()) {
+    where += ` AND (LOWER("title") LIKE $${i} OR LOWER("content") LIKE $${
+      i + 1
+    })`;
+    const query = `%${search.trim().toLowerCase()}%`;
+    params.push(query, query);
+    i += 2;
   }
 
-  if (author?.trim()) {
-    query += " AND LOWER(author) LIKE ?";
+  if (author.trim()) {
+    where += ` AND LOWER("author") LIKE $${i}`;
     params.push(`%${author.trim().toLowerCase()}%`);
+    i++;
   }
 
-  query += " ORDER BY publishedAt DESC LIMIT ? OFFSET ?";
+  const countRes = await pool.query(
+    `SELECT COUNT(*) AS total FROM "posts" ${where}`,
+    params
+  );
+  const total = parseInt(countRes.rows[0].total, 10);
+
   params.push(limit, (page - 1) * limit);
 
-  const countQuery = query
-    .replace("SELECT *", "SELECT COUNT(*) as total")
-    .replace("LIMIT ? OFFSET ?", "");
+  const res = await pool.query(
+    `SELECT * FROM "posts" ${where} ORDER BY "publishedAt" DESC LIMIT $${i} OFFSET $${
+      i + 1
+    }`,
+    params
+  );
 
-  const stmt = db.prepare(query);
-  const countStmt = db.prepare(countQuery);
-
-  const posts = stmt.all(...params) as Post[];
-  const { total } = countStmt.get(...params.slice(0, -2)) as { total: number };
-
-  return { posts, total };
+  return { posts: res.rows, total };
 }
 
-export function getPostById(id: string): Post | undefined {
-  const stmt = db.prepare("SELECT * FROM posts WHERE id = ?");
-  return stmt.get(id) as Post | undefined;
+export async function getPostById(id: string): Promise<Post | undefined> {
+  const res = await pool.query(`SELECT * FROM "posts" WHERE "id" = $1`, [id]);
+  return res.rows[0];
 }
 
-export function createPost(post: Omit<Post, "id" | "publishedAt">): Post {
+export async function createPost(
+  post: Omit<Post, "id" | "publishedAt">
+): Promise<Post> {
   const id = uuidv4();
   const publishedAt = new Date().toISOString();
-  const stmt = db.prepare(`
-    INSERT INTO posts (id, title, author, content, coverImage, publishedAt)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `);
-  try {
-    stmt.run(
-      id,
-      post.title,
-      post.author,
-      post.content,
-      post.coverImage,
-      publishedAt
-    );
-    return { id, publishedAt, ...post };
-  } catch (error) {
-    throw new Error(
-      "Failed to create post: " +
-        (error instanceof Error ? error.message : "Unknown error")
-    );
-  }
-}
 
-export function updatePost(id: string, post: Partial<Post>): Post | undefined {
-  const existing = getPostById(id);
-  if (!existing) return undefined;
-  const stmt = db.prepare(`
-    UPDATE posts SET title = ?, author = ?, content = ?, coverImage = ?
-    WHERE id = ?
-  `);
-  try {
-    stmt.run(
-      post.title || existing.title,
-      post.author || existing.author,
-      post.content || existing.content,
-      post.coverImage || existing.coverImage,
-      id
-    );
-    return getPostById(id);
-  } catch (error) {
-    throw new Error(
-      "Failed to update post: " +
-        (error instanceof Error ? error.message : "Unknown error")
-    );
-  }
-}
-
-export function deletePost(id: string): boolean {
-  const stmt = db.prepare("DELETE FROM posts WHERE id = ?");
-  try {
-    const result = stmt.run(id);
-    return result.changes > 0;
-  } catch (error) {
-    throw new Error(
-      "Failed to delete post: " +
-        (error instanceof Error ? error.message : "Unknown error")
-    );
-  }
-}
-
-export function getCommentsByPostId(postId: string): Comment[] {
-  const stmt = db.prepare(
-    "SELECT * FROM comments WHERE postId = ? ORDER BY createdAt DESC"
+  await pool.query(
+    `INSERT INTO "posts" ("id", "title", "author", "content", "coverImage", "publishedAt")
+     VALUES ($1, $2, $3, $4, $5, $6)`,
+    [id, post.title, post.author, post.content, post.coverImage, publishedAt]
   );
-  return stmt.all(postId) as Comment[];
+
+  return { id, publishedAt, ...post };
 }
 
-export function createComment(
+export async function updatePost(
+  id: string,
+  post: Partial<Post>
+): Promise<Post | undefined> {
+  const existing = await getPostById(id);
+  if (!existing) return undefined;
+
+  const updated = {
+    title: post.title ?? existing.title,
+    author: post.author ?? existing.author,
+    content: post.content ?? existing.content,
+    coverImage: post.coverImage ?? existing.coverImage,
+  };
+
+  await pool.query(
+    `UPDATE "posts" SET "title" = $1, "author" = $2, "content" = $3, "coverImage" = $4 WHERE "id" = $5`,
+    [updated.title, updated.author, updated.content, updated.coverImage, id]
+  );
+
+  return await getPostById(id);
+}
+
+export async function deletePost(id: string): Promise<boolean> {
+  const res = await pool.query(`DELETE FROM "posts" WHERE "id" = $1`, [id]);
+  return res.rowCount! > 0;
+}
+
+export async function getCommentsByPostId(postId: string): Promise<Comment[]> {
+  const res = await pool.query(
+    `SELECT * FROM "comments" WHERE "postId" = $1 ORDER BY "createdAt" DESC`,
+    [postId]
+  );
+  return res.rows;
+}
+
+export async function createComment(
   comment: Omit<Comment, "id" | "createdAt">
-): Comment {
+): Promise<Comment> {
   const id = uuidv4();
   const createdAt = new Date().toISOString();
-  const stmt = db.prepare(`
-    INSERT INTO comments (id, postId, author, content, createdAt)
-    VALUES (?, ?, ?, ?, ?)
-  `);
-  try {
-    stmt.run(id, comment.postId, comment.author, comment.content, createdAt);
-    return { id, createdAt, ...comment };
-  } catch (error) {
-    throw new Error(
-      "Failed to create comment: " +
-        (error instanceof Error ? error.message : "Unknown error")
-    );
-  }
+
+  await pool.query(
+    `INSERT INTO "comments" ("id", "postId", "author", "content", "createdAt")
+     VALUES ($1, $2, $3, $4, $5)`,
+    [id, comment.postId, comment.author, comment.content, createdAt]
+  );
+
+  return { id, createdAt, ...comment };
 }
